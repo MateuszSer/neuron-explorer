@@ -1046,6 +1046,18 @@ class Runtime:
             finally:
                 self._capture_all, self._capture_from = None, 0
 
+    def _next_top(self, h, k=10, chunk=128):
+        """The model's next-token prediction after every position, from the final hidden states h [T, hidden] (already
+        through the final norm): top-k token ids and softmax probabilities, [T, k] each. Chunked so the [T, vocab]
+        logits never sit in memory at once."""
+        ids, probs = [], []
+        for s in range(0, h.shape[0], chunk):
+            p = torch.softmax(self.model.lm_head(h[s:s + chunk]).float(), -1)
+            top = p.topk(k)
+            ids.append(top.indices.cpu())
+            probs.append(top.values.cpu())
+        return {"ids": torch.cat(ids).numpy(), "p": torch.cat(probs).numpy()}
+
     def build_act_scale(self, path, tokens=10000, seq=512, seed=0):
         """Each neuron's largest positive and most negative activation over web text (positions >= 1)."""
         from datasets import load_dataset
@@ -1077,7 +1089,8 @@ class Runtime:
             if heads:
                 self._capture_heads = {"q": {}, "writes": {}, "y": {}, "s": {}, "x": {}, "rms": {}}
             try:
-                self.lm(input_ids=torch.tensor([ids], device=self.dev), use_cache=False)
+                h = self.lm(input_ids=torch.tensor([ids], device=self.dev), use_cache=False).last_hidden_state[0]
+                self.next_top = self._next_top(h)
                 if heads:
                     self.heads = {"T": len(ids), "ids": list(ids), **self._capture_heads}
                 return torch.stack([self._capture_full[l] for l in sorted(self._capture_full)]).numpy()

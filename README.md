@@ -62,9 +62,21 @@ The R and J++ lens rows read the maps of [bubskee/qwen3.5-4b-r-jpp-lenses](https
   neurons with similar down-projection columns next to each other.
 - **list**: units ranked by word-cluster mass against random-direction controls; `lens` searches the steer, R and logit
   lenses for a token, `fires` runs your text through the model and filters neurons by activation.
+  - **next token**: under the token chips, the model's top 10 next tokens with their softmax probabilities, after the
+    whole text or, on hovering or pinning a chip, after that token. In raw mode, clicking a prediction appends it and
+    runs the text again, so you can generate one token at a time while watching what fires.
+  - **chat** (checkbox): wraps the text as a user message in the chat template, so the last prediction is the first
+    token of the assistant's reply.
 - **neuron**: steered rollouts per prompt and dose, a three-column multi-turn steered chat (−, 0, +), lens and
   connections, a name, and where it fires on web text: its strongest FineFineWeb contexts per sign, each token shaded
   by the neuron's activation, and the domains it concentrates in.
+  - **recipe**: steers several neurons together instead of the open one, for example
+    `L8 N3091 +1.5, L16 N1995 -0.6, L13 N1852 +0.6`. A neuron written without a dose takes the dose box's value, and
+    `×2` multiplies instead of adding. The ▼ column reverses every push.
+  - **rep**: repetition penalty (1 = off). Around 1.05–1.1 it keeps strong pushes from looping, but over long replies
+    it pushes the model toward chains of associations instead.
+  - Pressing Enter while a reply is still streaming stops it and runs the new message or recipe. The stop button
+    only stops.
 - **embeddings**: UMAP of a layer's rollouts, coloured by neuron, prompt, dose or kind.
 - **language**: the interface follows the browser language on first visit; the menu at the right of the header
   switches between English and Simplified Chinese (the choice is kept in this browser). Translations live in
@@ -130,6 +142,10 @@ ids in them name different neurons in the smaller models.
   - The Claude chat finds `claude.exe`, stops chats with `taskkill`, and finds its session folder.
 - **Agent prompt.** It fills in the running model's name and size, and says that the reference neurons in the
   methodology come from Qwen3.5-4B.
+- **Next-token panel on run.** It shows the top-10 softmax predictions after every position, computed in the same
+  forward pass as the activations (`/api/infer/next`). It has a raw/chat checkbox and click-to-append.
+- **Multi-neuron recipes in the chat.** The recipe and rep boxes in the chat send several pushes and a repetition
+  penalty through `/api/steer` (`neurons`, `repetition_penalty`), the same way the agent's tools do.
 
 ## License
 

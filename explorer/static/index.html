@@ -66,7 +66,9 @@
     <div id="lt-run" class="lpane">
       <textarea id="inf-text" rows="6" placeholder="paste text: see which neurons fire most on each token" aria-label="paste text: see which neurons fire most on each token" spellcheck="false" data-i18n-placeholder="list.infText" data-i18n-aria-label="list.infText"></textarea>
       <div id="infer">
+        <label id="inf-chat-lab" title="wrap the text as a user message in the chat template, so the next token is the start of the assistant's reply" data-i18n-title="list.chatTitle"><input type="checkbox" id="inf-chat"> <span data-i18n="list.chat">chat</span></label>
         <div id="inf-toks"></div>
+        <div id="inf-next"></div>
         <div id="inf-filters">
           <span class="lab">L</span><input id="inf-lo" value="0" inputmode="numeric" aria-label="from layer" data-i18n-aria-label="list.fromLayer"><span class="lab">–</span><input id="inf-hi" value="31" inputmode="numeric" aria-label="to layer" data-i18n-aria-label="list.toLayer">
           <span class="seg" id="inf-sign"><button data-s="both" class="on">±</button><button data-s="+">+</button><button data-s="-">−</button></span>
@@ -94,6 +96,7 @@
           <span class="stepper"><button type="button" id="c-minus" aria-label="smaller" data-i18n-aria-label="chat.smaller">−</button><input id="c-dose" class="mono" inputmode="decimal" aria-label="dose" value="0.8" data-i18n-aria-label="chat.dose"><button type="button" id="c-plus" aria-label="larger" data-i18n-aria-label="chat.larger">+</button></span>
           <button type="button" id="c-clear" class="dim" data-i18n="chat.clear">clear</button>
         </div>
+        <div class="row" id="c-recipe-row"><input id="c-recipe" class="mono" placeholder="recipe: L8 N3091 +1.5, L16 N1995 -0.6 (empty: the open neuron)" aria-label="recipe" autocomplete="off" spellcheck="false" data-i18n-placeholder="chat.recipe" data-i18n-aria-label="chat.recipeLabel"><input id="c-rep" class="mono" placeholder="rep 1.0" title="repetition penalty (1 = off; 1.1 keeps strong pushes from looping)" inputmode="decimal" autocomplete="off" data-i18n-title="chat.repTitle"></div>
         <div class="row"><input id="c-input" placeholder="Who are you?" aria-label="Who are you?" autocomplete="off" data-i18n-placeholder="chat.who" data-i18n-aria-label="chat.who"><button id="c-go" type="submit" data-i18n="chat.run">run</button></div>
       </form>
     </div>

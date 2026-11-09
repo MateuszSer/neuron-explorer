@@ -274,8 +274,13 @@ async def steer(req: Request):
                 for turn in b.get("history", []):
                     msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["replies"][r]}]
                 rows.append(msgs + [{"role": "user", "content": b["prompt"]}])
-            for row, delta in rt.steer_stream(int(b["layer"]), int(b["n"]), rows, float(b["dose"]),
-                                              b.get("mode", "add"), int(b.get("max_new", 300)), cancel):
+            # a recipe pushes several neurons together (row 0 as given, row 2 every push reversed); else the open neuron
+            if b.get("neurons"):
+                pushes = [(int(x["layer"]), int(x["n"]), float(x["dose"]), x.get("mode", "add")) for x in b["neurons"]]
+            else:
+                pushes = [(int(b["layer"]), int(b["n"]), float(b["dose"]), b.get("mode", "add"))]
+            for row, delta in rt.steer_multi(pushes, rows, int(b.get("max_new", 300)), cancel,
+                                             repetition_penalty=float(b.get("repetition_penalty") or 1.0)):
                 loop.call_soon_threadsafe(q.put_nowait, {"row": row, "t": delta})
         except Exception as e:  # surfaced in the UI next to the chat
             loop.call_soon_threadsafe(q.put_nowait, {"row": None, "error": repr(e)})
@@ -418,10 +423,12 @@ async def infer(req: Request):
     if not os.path.exists(ACT_SCALE) or rt.tok is None:
         return {"ready": False}
     ids, acts, score = await score_text(b["text"], b.get("chat", False), heads=True)
+    nxt = rt.next_top  # set by the same forward pass (full_activations)
     units = rt.token_units(ids)
     unit_of = {i: k for k, (_, idx) in enumerate(units) for i in idx}
     _infer.clear()
-    _infer.update(ids=ids, toks=[units[unit_of[i]][0] for i in range(len(ids))], acts=acts, score=score, units=units)
+    _infer.update(ids=ids, toks=[units[unit_of[i]][0] for i in range(len(ids))], acts=acts, score=score, units=units,
+                  next=nxt)
     # one chip per unit; clicking it selects the unit's last token (the one that completes the character)
     return {"ready": True, "tokens": [u[0] for u in units], "pos": [u[1][-1] for u in units]}
 
@@ -468,6 +475,22 @@ async def infer_view(pos: int = -1, sign: str = "both", lo: int = 0, hi: int = 9
                     "name": nm.get(f"L{l}/N{n}", ""), "lens": lens})
     blob = base64.b64encode(view.astype(np.float16).tobytes()).decode()
     return {"results": res, "total": int(keep.sum()), "map": blob, "shape": list(view.shape)}
+
+
+@app.get("/api/infer/next")
+def infer_next(pos: int = -1, k: int = 10):
+    """What the model predicts right after token `pos` of the last inferred text (-1: after the whole text): the top-k
+    next tokens with their softmax probabilities, from the same forward pass as the activations."""
+    nxt, toks = _infer.get("next"), _infer.get("toks")
+    if nxt is None or not toks:
+        return {"top": []}
+    T = len(nxt["ids"])
+    pos = T - 1 if pos < 0 or pos >= T else pos
+    vocab = rt.vocab_strings()
+    k = max(1, min(k, nxt["ids"].shape[1]))
+    return {"pos": pos, "after": toks[pos], "last": pos == T - 1,
+            "top": [{"id": int(i), "tok": vocab[int(i)], "p": round(float(p), 4)}
+                    for i, p in zip(nxt["ids"][pos, :k], nxt["p"][pos, :k])]}
 
 
 def _heads_for_infer():

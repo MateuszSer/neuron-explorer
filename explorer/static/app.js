@@ -301,12 +301,13 @@ let qGen = 0;
 const stillWanted = (g, mode, q) => g === qGen && state.qMode === mode && $("#lens-q").value.trim() === q;
 async function runInfer(text, g) {
   markLeftFresh("run");
-  if (text !== state.inf.text) {
+  const chat = $("#inf-chat").checked;
+  if (text !== state.inf.text || chat !== state.inf.chat) {
     $("#run-rows").innerHTML = `<li class="head">${t("results.running")}</li>`;
-    const r = await api("/api/infer", { text });
-    if (!stillWanted(g, "fires", text)) return;
+    const r = await api("/api/infer", { text, chat });
+    if (!stillWanted(g, "fires", text) || chat !== $("#inf-chat").checked) return;
     if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.measuring"))}</li>`; return; }
-    state.inf = { ...state.inf, text, pos: -1, tokens: r.tokens };
+    state.inf = { ...state.inf, text, chat, pos: -1, tokens: r.tokens };
     $("#inf-toks").innerHTML = r.tokens.map((t, i) => `<button data-i="${r.pos[i]}">${esc(t)}</button>`).join("");
   }
   await inferView(g);
@@ -381,6 +382,7 @@ let viewGen = 0;
 async function inferView(g = qGen) {
   const f = state.inf, mine = ++viewGen;
   if (!f.text) return;
+  showNext(f.pos);  // read now: previewToken swaps state.inf.pos back right after this call
   const qs = new URLSearchParams({ pos: f.pos, sign: f.sign, lo: $("#inf-lo").value || 0, hi: $("#inf-hi").value || 99,
     min: $("#inf-min").value || 0, q: $("#inf-q").value, limit: 300 });
   const r = await api(`/api/infer/view?${qs}`);
@@ -400,6 +402,35 @@ async function inferView(g = qGen) {
   fireResults = { ...r, fires: true, ready: true };
   renderResults(fireResults, $("#run-rows"));
 }
+// next token: the model's top predictions after the pinned (or hovered) token, or after the whole text. After the
+// whole text a prediction can be clicked to append it, which runs the text again (step-by-step generation).
+let nextGen = 0;
+const showTok = s => s.replace(/\n/g, "↵").replace(/\t/g, "⇥").replace(/^ /, "␣");
+async function showNext(pos) {
+  const g = ++nextGen, el = $("#inf-next");
+  const r = state.inf.text ? await api(`/api/infer/next?pos=${pos}`) : null;
+  if (g !== nextGen) return;
+  if (!r?.top?.length) { el.innerHTML = ""; return; }
+  const max = r.top[0].p || 1, chat = state.inf.chat;
+  const head = !r.last ? t("next.headAfter", { tok: r.after }) : chat ? t("next.headReply") : t("next.headEnd");
+  el.innerHTML = `<div class="head">${esc(head)}</div>` +
+    r.top.map(x => {
+      // appending works on raw text only (in chat it would land in the user's message, not the reply), and a lone
+      // byte of a multi-byte character can't be appended
+      const usable = r.last && !chat && !x.tok.includes("�");
+      return `<button class="nx" data-tok="${esc(x.tok)}" ${usable ? `title="${esc(t("next.append"))}"` : "disabled"}>` +
+        `<span class="bar" style="width:${(100 * x.p / max).toFixed(1)}%"></span>` +
+        `<span class="tk">${esc(showTok(x.tok))}</span><span class="pc">${(100 * x.p).toFixed(1)}%</span></button>`;
+    }).join("");
+}
+// chat on: the text runs as a user message in the chat template, so the last position is where the reply starts
+$("#inf-chat").addEventListener("change", () => {
+  if (state.qMode === "fires" && $("#lens-q").value.trim().length >= 2) runInfer($("#lens-q").value.trim(), ++qGen);
+});
+$("#inf-next").addEventListener("click", e => {
+  const b = e.target.closest("button.nx"); if (!b || b.disabled) return;
+  const ta = $("#inf-text"); ta.value += b.dataset.tok; ta.dispatchEvent(new Event("input"));
+});
 function halfToFloat(h) {
   const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
   return e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15);
@@ -411,7 +442,7 @@ async function runLensSearch() {
     // an emptied box clears both: lens hits, and the last run with its token chips, pinned token and token web
     lensResults = null; fireResults = null;
     state.inf = { ...state.inf, text: null, pos: -1, tokens: null };
-    $("#inf-toks").innerHTML = ""; $("#run-rows").innerHTML = "";
+    $("#inf-toks").innerHTML = ""; $("#run-rows").innerHTML = ""; $("#inf-next").innerHTML = "";
     syncLeftMap(); renderList(); return;
   }
   if (state.qMode === "fires") return runInfer(q, g);
@@ -903,13 +934,33 @@ showDose();
 let running = null;
 state.thread = [];
 const ROWS = ["up", "zero", "down"];
-function turnLabels(t) {
-  return t.mode === "mul" ? [`▲ ×${t.dose}`, "×1", `▼ ×−${t.dose}`] : [`▲ +${t.dose}`, "0", `▼ −${t.dose}`];
+function turnLabels(tn) {
+  if (tn.neurons) return [t("chat.recipeUp"), "0", t("chat.recipeDown")];
+  return tn.mode === "mul" ? [`▲ ×${tn.dose}`, "×1", `▼ ×−${tn.dose}`] : [`▲ +${tn.dose}`, "0", `▼ −${tn.dose}`];
 }
+// a recipe pushes several neurons at once: "L8 N3091 +1.5, L16 N1995 -0.6, L13 N1852 ×2" (a neuron without a dose
+// takes the dose box's value; × multiplies instead of adding)
+function parseRecipe(s) {
+  const out = [];
+  for (const m of s.matchAll(/L\s*(\d+)[\s\/·.:]*N\s*(\d+)\s*([×x*])?\s*([+\-−]?\s*\d*\.?\d+)?/gi)) {
+    const dose = m[4] != null ? parseFloat(m[4].replace(/\s/g, "").replace("−", "-")) : null;
+    out.push({ layer: +m[1], n: +m[2], mode: m[3] ? "mul" : "add", dose });
+  }
+  return out;
+}
+const fmtPush = p => `L${p.layer} N${p.n} ${p.mode === "mul" ? "×" : p.dose >= 0 ? "+" : ""}${p.dose}`;
+function turnRecipe(tn) {
+  const base = tn.neurons ? tn.neurons.map(fmtPush).join(", ") : `${tn.mode === "mul" ? "×" : t("chat.add")} ${tn.dose}`;
+  return tn.rep && tn.rep !== 1 ? `${base} · rep ${tn.rep}` : base;
+}
+$("#c-recipe").addEventListener("input", e => {
+  const v = e.target.value.trim();
+  e.target.classList.toggle("bad", v !== "" && !parseRecipe(v).length);
+});
 function renderThread() {
   const el = $("#c-thread");
   el.innerHTML = state.thread.map((turn, i) => `<div class="turn" data-i="${i}">
-    <div class="user">${esc(turn.user)}<span class="recipe">${turn.mode === "mul" ? "×" : t("chat.add")} ${turn.dose}</span></div>
+    <div class="user">${esc(turn.user)}<span class="recipe">${esc(turnRecipe(turn))}</span></div>
     <div class="cols">${ROWS.map((c, r) => `<div class="col ${c}${turn.live && !turn.done[r] ? " live" : ""}"><span class="lab">${turnLabels(turn)[r]}</span>${esc(turn.replies[r])}</div>`).join("")}
     ${turn.error ? `<div class="err err-raw" data-raw="${esc(turn.error)}">${esc(localizeError(turn.error))}</div>` : ""}</div></div>`).join("");
   el.scrollTop = el.scrollHeight;
@@ -917,22 +968,41 @@ function renderThread() {
 $("#c-clear").onclick = () => { if (running) running.abort(); state.thread = []; renderThread(); };
 let reading = false;
 
+let runningDone = Promise.resolve(), enterSubmit = false;
+// Enter in a box submits through the default button too, so the key is what tells it apart from a click on "stop"
+for (const id of ["#c-input", "#c-recipe", "#c-rep"]) $(id).addEventListener("keydown", e => { if (e.key === "Enter") enterSubmit = true; });
 $("#c-form").addEventListener("submit", async e => {
   e.preventDefault();
-  if (running) { running.abort(); return; }
-  const f = state.focus; if (!f) return;
+  const viaEnter = enterSubmit; enterSubmit = false;
+  if (running) {
+    // the button reads "stop" while a reply streams: clicking it only stops; Enter in a box stops the old reply and
+    // runs the new message or recipe (strong pushes often run to the length cap, so waiting would look like a hang)
+    running.abort();
+    if (!viaEnter) return;
+    await runningDone;
+    if (running) return;
+  }
+  let finish; runningDone = new Promise(r => { finish = r; });
+  const f = state.focus;
   const text = $("#c-input").value.trim() || $("#c-input").placeholder;
-  if (state.chat.dir === "reads") return runReads(f, text);
+  if (state.chat.dir === "reads") { finish(); return f ? runReads(f, text) : undefined; }
+  // a filled recipe box steers its neurons instead of the open one
+  const recipe = parseRecipe($("#c-recipe").value)
+    .map(p => ({ ...p, dose: p.dose ?? (p.mode === "mul" ? state.chat.dose.mul : state.chat.dose.add) }));
+  if (!f && !recipe.length) { finish(); return; }
+  const rep = Math.max(1, parseFloat($("#c-rep").value) || 1);
   const dose = state.chat.mode === "mul" ? state.chat.dose.mul : state.chat.dose.add;
   const history = state.thread.filter(t => !t.error).map(t => ({ user: t.user, replies: t.replies }));
-  const turn = { user: text, replies: ["", "", ""], done: [false, false, false], dose, mode: state.chat.mode, live: true };
+  const turn = { user: text, replies: ["", "", ""], done: [false, false, false], dose, mode: state.chat.mode, live: true,
+    neurons: recipe.length ? recipe : null, rep };
   state.thread.push(turn); $("#c-input").value = ""; renderThread();
   const cols = [...$("#c-thread").lastElementChild.querySelectorAll(".col")];
   const ctl = new AbortController(), thread = state.thread;
   running = ctl; $("#c-go").textContent = t("chat.stop");
   try {
     const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
-      body: JSON.stringify({ layer: f.layer, n: f.n, prompt: text, dose, mode: state.chat.mode, history }) });
+      body: JSON.stringify({ layer: f?.layer, n: f?.n, prompt: text, dose, mode: state.chat.mode, history,
+        neurons: turn.neurons, repetition_penalty: rep }) });
     if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
@@ -957,6 +1027,7 @@ $("#c-form").addEventListener("submit", async e => {
     turn.live = false; turn.done = [true, true, true];
     if (running === ctl) { running = null; $("#c-go").textContent = t("chat.run"); }
     if (state.thread === thread) renderThread();
+    finish();
   }
 });
 
@@ -1422,7 +1493,7 @@ function relabelChatThread() {
   document.querySelectorAll("#c-thread .turn").forEach(el => {
     const turn = state.thread[+el.dataset.i]; if (!turn) return;
     const recipe = el.querySelector(".recipe");
-    if (recipe) recipe.textContent = `${turn.mode === "mul" ? "×" : t("chat.add")} ${turn.dose}`;
+    if (recipe) recipe.textContent = turnRecipe(turn);
     const labels = turnLabels(turn);
     el.querySelectorAll(".col .lab").forEach((lab, r) => { if (labels[r] != null) lab.textContent = labels[r]; });
   });

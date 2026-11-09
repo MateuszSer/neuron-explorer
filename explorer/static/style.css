@@ -200,6 +200,9 @@ body.list-hidden #layer-back { left: 56px; }
 #c-form { display: block; margin: 10px 0 0; }
 #c-form .row { display: flex; gap: 8px; margin-top: 8px; }
 #c-clear { margin-left: auto; font-size: 13px; }
+#c-recipe { flex: 1; min-width: 0; font-size: 12px; }
+#c-rep { width: 68px; flex: none; font-size: 12px; }
+#c-recipe.bad { outline: 1px solid rgba(255, 79, 154, 0.7); }
 .turn { margin-bottom: 18px; }
 .turn .user { margin: 0 0 10px auto; max-width: 80%; width: fit-content; background: var(--raise); border-radius: 6px;
   padding: 7px 11px; white-space: pre-wrap; }
@@ -223,6 +226,18 @@ body.list-hidden #layer-back { left: 56px; }
 #inf-toks { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 8px; max-height: 120px; overflow-y: auto; }
 #inf-toks button { font: 12px var(--mono); background: var(--raise); border-radius: 3px; padding: 1px 4px; white-space: pre; color: var(--dim); }
 #inf-toks button.on { background: rgba(56, 200, 255, 0.22); color: var(--ink); }
+#inf-chat-lab { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); margin-bottom: 6px; cursor: pointer; user-select: none; }
+#inf-chat-lab input { margin: 0; accent-color: rgb(56, 200, 255); }
+#inf-next { margin-bottom: 8px; }
+#inf-next:empty { display: none; }
+#inf-next .head { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+#inf-next .nx { position: relative; display: flex; justify-content: space-between; gap: 8px; width: 100%;
+  font: 12px var(--mono); color: var(--ink); background: none; padding: 1px 4px; border-radius: 3px; text-align: left; }
+#inf-next .nx:not(:disabled):hover { background: var(--raise); cursor: pointer; }
+#inf-next .nx:disabled { cursor: default; }
+#inf-next .bar { position: absolute; left: 0; top: 1px; bottom: 1px; background: rgba(56, 200, 255, 0.16); border-radius: 3px; }
+#inf-next .tk, #inf-next .pc { position: relative; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+#inf-next .pc { color: var(--dim); flex: none; }
 #inf-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 #inf-filters input { width: 3em; padding: 3px 5px; font: 12px var(--mono); text-align: center; }
 #inf-filters #inf-q { width: auto; flex: 1; min-width: 80px; text-align: left; font-family: var(--font); }
