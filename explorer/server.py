@@ -493,6 +493,111 @@ def infer_next(pos: int = -1, k: int = 10):
                     for i, p in zip(nxt["ids"][pos, :k], nxt["p"][pos, :k])]}
 
 
+# ---------- contrast: what fires more on texts A than on texts B ----------
+_contrast = {}
+MAX_CONTRAST_TEXTS = 24
+
+
+def _texts(x):
+    xs = [x] if isinstance(x, str) else list(x or [])
+    return [s for s in (t.strip() if isinstance(t, str) else str(t.get("text", "")).strip() for t in xs) if s]
+
+
+async def contrast_scores(a, b, chat=False, at="peak"):
+    """Every neuron on texts A against texts B. Per text and pole (+ and -) the neuron's peak score over the tokens
+    (at="last": its score at the last token only, where a chat reply starts); per group the mean over its texts. d is
+    A - B on whichever pole differs more; consistent means every text of the stronger group beats every text of the
+    other on that pole, so the gap isn't one text's quirk."""
+    async def one(text):
+        ids, acts, score = await score_text(text, chat)
+        del acts
+        T = score.shape[1]
+        base = T - 1 if at == "last" else (1 if T > 1 else 0)
+        S = score[:, base:, :]
+        return {"up": np.maximum(S.max(1), 0), "dn": np.maximum(-S.min(1), 0),
+                "up_i": (S.argmax(1) + base).astype(np.int16), "dn_i": (S.argmin(1) + base).astype(np.int16),
+                "toks": [rt.tok.decode([i]) for i in ids]}
+    C = {}
+    for g, texts in (("a", a), ("b", b)):
+        rs = [await one(t) for t in texts]
+        for k in ("up", "dn", "up_i", "dn_i"):
+            C[f"{g}_{k}"] = np.stack([r[k] for r in rs])  # [texts, L, N]
+        C[f"{g}_toks"] = [r["toks"] for r in rs]
+    d_up = C["a_up"].mean(0) - C["b_up"].mean(0)
+    d_dn = C["a_dn"].mean(0) - C["b_dn"].mean(0)
+    up = np.abs(d_up) >= np.abs(d_dn)
+    d = np.where(up, d_up, d_dn).astype(np.float32)
+    cons_up = np.where(d_up > 0, C["a_up"].min(0) > C["b_up"].max(0), C["b_up"].min(0) > C["a_up"].max(0))
+    cons_dn = np.where(d_dn > 0, C["a_dn"].min(0) > C["b_dn"].max(0), C["b_dn"].min(0) > C["a_dn"].max(0))
+    C.update(d=d, pole_up=up, cons=np.where(up, cons_up, cons_dn), texts={"a": a, "b": b}, chat=chat, at=at)
+    return C
+
+
+def _contrast_rows(C, sign="both", lo=0, hi=99, min_d=0.0, q="", limit=300, only_consistent=False, vocab=None):
+    """The neurons passing the filters, strongest difference first, and the mask of all that pass. sign '+': stronger
+    on A; '-': stronger on B."""
+    d, up = C["d"], C["pole_up"]
+    keep = np.abs(d) >= min_d
+    if sign == "+": keep &= d > 0
+    if sign == "-": keep &= d < 0
+    if only_consistent: keep &= C["cons"]
+    lay = np.arange(d.shape[0])[:, None]
+    keep &= (lay >= lo) & (lay <= hi)
+    idx = lens_index()
+    if q.strip() and idx is not None and vocab is not None:
+        ql = q.strip().lower()
+        match = np.array([i for i, t in enumerate(vocab) if ql in t.lower()], dtype=np.int32)
+        keep &= np.where(up[..., None], np.isin(idx["up"][:, :, :6], match), np.isin(idx["down"][:, :, :6], match)).any(-1)
+    ls, ns = np.nonzero(keep)
+    order = np.argsort(-np.abs(d[ls, ns]))[:limit]
+    rows = []
+    for o in order:
+        l, n = int(ls[o]), int(ns[o])
+        side, diff = ("up" if up[l, n] else "dn"), float(d[l, n])
+        g = "a" if diff > 0 else "b"
+        k = int(C[f"{g}_{side}"][:, l, n].argmax())  # the text of the stronger group where it fires hardest
+        t = int(C[f"{g}_{side}_i"][k, l, n])
+        rows.append({"layer": l, "n": n, "pole": "+" if up[l, n] else "-", "diff": round(diff, 2),
+                     "a": round(float(C[f"a_{side}"][:, l, n].mean()), 2),
+                     "b": round(float(C[f"b_{side}"][:, l, n].mean()), 2),
+                     "consistent": bool(C["cons"][l, n]), "token": C[f"{g}_toks"][k][t], "text": f"{g.upper()}{k + 1}"})
+    return rows, keep
+
+
+@app.post("/api/contrast")
+async def contrast(req: Request):
+    """Runs texts A and B through the model and keeps every neuron's A - B difference for /api/contrast/view."""
+    b = await req.json()
+    if not os.path.exists(ACT_SCALE) or rt.tok is None:
+        return {"ready": False}
+    a, bb = _texts(b.get("a")), _texts(b.get("b"))
+    if not a or not bb:
+        return {"ready": True, "error": "need at least one A text and one B text"}
+    if len(a) + len(bb) > MAX_CONTRAST_TEXTS:
+        return {"ready": True, "error": f"at most {MAX_CONTRAST_TEXTS} texts in all"}
+    C = await contrast_scores(a, bb, b.get("chat", False), b.get("at", "peak"))
+    _contrast.clear(); _contrast.update(C)
+    return {"ready": True, "a": len(a), "b": len(bb)}
+
+
+@app.get("/api/contrast/view")
+async def contrast_view(sign: str = "both", lo: int = 0, hi: int = 99, min: float = 0.5, q: str = "",
+                        consistent: bool = False, limit: int = 300):
+    """The last contrast, filtered: rows plus every neuron's signed difference (base64 float16, layer-major) for the map."""
+    if "d" not in _contrast:
+        return {"results": [], "total": 0}
+    import base64
+    vocab = await asyncio.to_thread(rt.vocab_strings)
+    rows, keep = _contrast_rows(_contrast, sign, lo, hi, min, q, limit, consistent, vocab)
+    idx, nm = lens_index(), names()
+    for r in rows:
+        r["lens"] = [vocab[k] for k in (idx["up"] if r["pole"] == "+" else idx["down"])[r["layer"], r["n"], :6]] if idx is not None else []
+        r["name"] = nm.get(f"L{r['layer']}/N{r['n']}", "")
+    view = np.where(keep, _contrast["d"], 0).astype(np.float16)
+    return {"results": rows, "total": int(keep.sum()), "a": len(_contrast["texts"]["a"]), "b": len(_contrast["texts"]["b"]),
+            "map": base64.b64encode(view.tobytes()).decode(), "shape": list(view.shape)}
+
+
 def _heads_for_infer():
     """The head captures of the last inferred text (re-captured if another text ran since)."""
     ids = _infer.get("ids")
@@ -1246,6 +1351,35 @@ async def agent_fires(req: Request):
                     "steer": [v[t] for t in st["up" if sg == "+" else "down"][l, n, :6]]})
     return {"tokens": toks, "at": pos, "token": toks[pos],
             "note": "score = activation / the neuron's typical extreme on that side; 1 = as strong as its usual max",
+            "neurons": res}
+
+
+@app.post("/api/agent/contrast")
+async def agent_contrast(req: Request):
+    """For Claude: which neurons fire more on texts A than on texts B (or the other way), over all neurons. Leaves
+    the person's run tab alone."""
+    b = await req.json()
+    if off := _live_off():
+        return off
+    a, bb = _texts(b.get("a")), _texts(b.get("b"))
+    if not a or not bb:
+        return {"error": "need at least one A text and one B text"}
+    if len(a) + len(bb) > MAX_CONTRAST_TEXTS:
+        return {"error": f"at most {MAX_CONTRAST_TEXTS} texts in all"}
+    C = await contrast_scores(a, bb, b.get("chat", False), b.get("at", "peak"))
+    lo, hi = b.get("layers") or (0, 99)
+    rows, keep = _contrast_rows(C, b.get("sign", "both"), lo, hi, float(b.get("min", 0.3)), "", int(b.get("limit", 40)),
+                                bool(b.get("consistent_only", False)))
+    st = rt.steer_index() or rt.lens_index()
+    v, nm = rt.vocab_strings(), names()
+    res = [{"neuron": f"L{r['layer']} N{r['n']}", "pole": r["pole"], "diff": r["diff"], "a": r["a"], "b": r["b"],
+            "consistent": r["consistent"], "token": r["token"], "text": r["text"],
+            "name": nm.get(f"L{r['layer']}/N{r['n']}") or None,
+            "steer": [v[t] for t in st["up" if r["pole"] == "+" else "down"][r["layer"], r["n"], :6]]} for r in rows]
+    return {"a_texts": len(a), "b_texts": len(bb), "at": C["at"], "passing": int(keep.sum()),
+            "note": "a / b = the pole's mean peak score per group (1 = the neuron's usual max); diff = a - b, positive "
+                    "means stronger on A; consistent = every text of the stronger group beats every text of the other; "
+                    "token / text = where it fired hardest in the stronger group (A1 = the first A text)",
             "neurons": res}
 
 

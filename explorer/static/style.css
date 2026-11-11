@@ -226,8 +226,13 @@ body.list-hidden #layer-back { left: 56px; }
 #inf-toks { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 8px; max-height: 120px; overflow-y: auto; }
 #inf-toks button { font: 12px var(--mono); background: var(--raise); border-radius: 3px; padding: 1px 4px; white-space: pre; color: var(--dim); }
 #inf-toks button.on { background: rgba(56, 200, 255, 0.22); color: var(--ink); }
-#inf-chat-lab { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); margin-bottom: 6px; cursor: pointer; user-select: none; }
-#inf-chat-lab input { margin: 0; accent-color: rgb(56, 200, 255); }
+#inf-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 6px; }
+#inf-opts #cmp-opts:not([hidden]) { display: inline-flex; align-items: center; gap: 10px; }
+.inf-lab { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); cursor: pointer; user-select: none; }
+.inf-lab input { margin: 0; accent-color: rgb(56, 200, 255); }
+#inf-text-b { display: block; width: calc(100% - 20px); box-sizing: border-box; resize: vertical; margin: 0 10px 4px; background: var(--raise); border: 0; border-left: 2px solid var(--down); border-radius: 4px; padding: 6px 8px; color: var(--ink); font: 13px/1.4 var(--font); outline: none; }
+body.cmp #inf-text { border-left: 2px solid var(--up); }
+.rows li.res .cons { color: var(--up); margin-right: 4px; }
 #inf-next { margin-bottom: 8px; }
 #inf-next:empty { display: none; }
 #inf-next .head { font-size: 11px; color: var(--dim); margin-bottom: 4px; }

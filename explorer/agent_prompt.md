@@ -73,7 +73,10 @@ pushed-up, unsteered and pushed-down rollouts from any prompt, `activations` giv
 token of any text, `compare` reads many neurons across several texts at once (screen candidates against
 targets and controls in one call), `logprobs` gives the next token's distribution after any text, and with
 pushes or ablations what they do to it (KL and the tokens that rose and fell), and `top_firing` lists the neurons firing hardest at a token of any text (use it to find a neuron for
-a concept: write text about the concept and see what fires on its key token). Use them for positive controls, near misses and distant concepts, and report what came back. When the
+a concept: write text about the concept and see what fires on its key token). To find neurons behind a behaviour
+or persona, use `contrast`: texts with the trait as A, matched texts without it as B (a few paraphrases on each
+side, so neurons reading one word drop out), and it ranks every neuron by the A - B gap; prefer `consistent` ones,
+then test them with `logprobs` and `steer` before you call one causal. Use them for positive controls, near misses and distant concepts, and report what came back. When the
 model is off they return an error; then propose the test instead.
 
 ## Attention heads

@@ -1,6 +1,6 @@
 import { createMap } from "./map3d.js?v=78";
 import { createScatter } from "./scatter.js?v=39";
-import { t, tp, initI18n, applyTranslations, getLang, localizeError } from "./i18n.js?v=4";
+import { t, tp, initI18n, applyTranslations, getLang, localizeError } from "./i18n.js?v=5";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -301,6 +301,7 @@ let qGen = 0;
 const stillWanted = (g, mode, q) => g === qGen && state.qMode === mode && $("#lens-q").value.trim() === q;
 async function runInfer(text, g) {
   markLeftFresh("run");
+  if (cmpOn()) return runContrast(text, g);
   const chat = $("#inf-chat").checked;
   if (text !== state.inf.text || chat !== state.inf.chat) {
     $("#run-rows").innerHTML = `<li class="head">${t("results.running")}</li>`;
@@ -380,6 +381,7 @@ let infTimer;
 for (const id of ["#inf-lo", "#inf-hi", "#inf-min", "#inf-q"]) $(id).addEventListener("input", () => { clearTimeout(infTimer); infTimer = setTimeout(inferView, 200); });
 let viewGen = 0;
 async function inferView(g = qGen) {
+  if (cmpOn()) return contrastView(g);
   const f = state.inf, mine = ++viewGen;
   if (!f.text) return;
   showNext(f.pos);  // read now: previewToken swaps state.inf.pos back right after this call
@@ -387,6 +389,12 @@ async function inferView(g = qGen) {
     min: $("#inf-min").value || 0, q: $("#inf-q").value, limit: 300 });
   const r = await api(`/api/infer/view?${qs}`);
   if (mine !== viewGen || g !== qGen || state.qMode !== "fires") return;
+  if (leftTab === "run") map.setMarks(marksFromBlob(r));
+  fireResults = { ...r, fires: true, ready: true };
+  renderResults(fireResults, $("#run-rows"));
+}
+// a view's every-neuron signed values (base64 float16, layer-major) as map marks, the strongest 40k at most
+function marksFromBlob(r) {
   const marks = [];
   if (r.map) {
     const bin = atob(r.map), u16 = new Uint16Array(bin.length / 2);
@@ -398,9 +406,7 @@ async function inferView(g = qGen) {
       if (v) marks.push({ layer: Math.floor(i / N), n: i % N, sign: v < 0 ? "-" : "+", w: Math.min(1, 0.25 + Math.abs(v) / 4) });
     }
   }
-  if (leftTab === "run") map.setMarks(marks.length > 40000 ? marks.sort((a, b) => b.w - a.w).slice(0, 40000) : marks);
-  fireResults = { ...r, fires: true, ready: true };
-  renderResults(fireResults, $("#run-rows"));
+  return marks.length > 40000 ? marks.sort((a, b) => b.w - a.w).slice(0, 40000) : marks;
 }
 // next token: the model's top predictions after the pinned (or hovered) token, or after the whole text. After the
 // whole text a prediction can be clicked to append it, which runs the text again (step-by-step generation).
@@ -427,6 +433,72 @@ async function showNext(pos) {
 $("#inf-chat").addEventListener("change", () => {
   if (state.qMode === "fires" && $("#lens-q").value.trim().length >= 2) runInfer($("#lens-q").value.trim(), ++qGen);
 });
+// compare: the box above holds texts A, a second box texts B (several per box, split by a line of ---); the list
+// ranks every neuron by how much more it fires on A than on B (or the reverse), from one run of all the texts
+const cmpOn = () => $("#inf-cmp").checked;
+const splitTexts = s => s.split(/^\s*-{3,}\s*$/m).map(x => x.trim()).filter(Boolean);
+state.cmp = { key: null, at: "peak" };
+// texts A come from the paste box itself: the header's search box is one line and drops the --- separators
+const cmpKey = () => JSON.stringify([splitTexts($("#inf-text").value), splitTexts($("#inf-text-b").value), $("#inf-chat").checked, state.cmp.at]);
+async function runContrast(text, g) {
+  $("#inf-toks").innerHTML = ""; $("#inf-next").innerHTML = "";
+  const a = splitTexts($("#inf-text").value), b = splitTexts($("#inf-text-b").value), chat = $("#inf-chat").checked, at = state.cmp.at;
+  if (!a.length || !b.length) { fireResults = null; $("#run-rows").innerHTML = `<li class="head">${t("cmp.needB")}</li>`; map.setMarks([]); return; }
+  const key = JSON.stringify([a, b, chat, at]);
+  if (key !== state.cmp.key) {
+    $("#run-rows").innerHTML = `<li class="head">${t("results.running")}</li>`;
+    state.cmp.key = null;
+    const r = await api("/api/contrast", { a, b, chat, at });
+    if (g !== qGen || !cmpOn() || key !== cmpKey()) return;
+    if (!r.ready) { $("#run-rows").innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.measuring"))}</li>`; return; }
+    if (r.error) { $("#run-rows").innerHTML = `<li class="head">${esc(r.error)}</li>`; return; }
+    state.cmp.key = key;
+  }
+  await contrastView(g);
+}
+async function contrastView(g = qGen) {
+  const mine = ++viewGen;
+  if (!state.cmp.key) return;
+  const qs = new URLSearchParams({ sign: state.inf.sign, lo: $("#inf-lo").value || 0, hi: $("#inf-hi").value || 99,
+    min: $("#inf-min").value || 0, q: $("#inf-q").value, consistent: $("#cmp-cons").checked, limit: 300 });
+  const r = await api(`/api/contrast/view?${qs}`);
+  if (mine !== viewGen || g !== qGen || state.qMode !== "fires" || !cmpOn()) return;
+  if (leftTab === "run") map.setMarks(marksFromBlob(r));
+  fireResults = { ...r, cmp: true, ready: true };
+  renderResults(fireResults, $("#run-rows"));
+}
+function renderContrast(r, ol) {
+  const rows = (r.results || []).map(x => {
+    const tip = t("cmp.row", { a: x.a.toFixed(2), b: x.b.toFixed(2), pole: x.pole === "+" ? "+" : "−", cons: x.consistent ? t("cmp.consMark") : "" });
+    return `<li class="res" data-l="${x.layer}" data-n="${x.n}" data-kind="neuron" title="${esc(tip)}">
+    <span class="n">L${x.layer} N${x.n}</span><span class="sg ${x.diff > 0 ? "up" : "down"}">${x.diff > 0 ? "+" : "−"}${Math.abs(x.diff).toFixed(1)}</span>
+    <span class="w">${x.consistent ? `<span class="cons">✓</span>` : ""}<span class="tk">${esc(x.text)} "${esc(x.token)}"</span><span class="dim">${x.pole === "+" ? "(+)" : "(−)"}</span> ${x.name ? `<b>${esc(x.name)}</b> ` : ""}${esc((x.lens || []).join(" "))}</span></li>`;
+  }).join("");
+  ol.innerHTML = `<li class="head">${t("cmp.head", { total: r.total ?? 0, a: r.a ?? 0, b: r.b ?? 0 })}</li>` + rows;
+}
+function rerunRun() {
+  const q = $("#lens-q").value.trim();
+  if (state.qMode !== "fires") { $('#q-mode button[data-q="fires"]').click(); return; }  // the click reruns
+  if (q.length >= 2) runInfer(q, ++qGen);
+}
+$("#inf-cmp").addEventListener("change", () => {
+  const on = cmpOn();
+  $("#inf-text-b").hidden = !on; $("#cmp-opts").hidden = !on;
+  document.body.classList.toggle("cmp", on);
+  $("#inf-text").placeholder = on ? t("cmp.textA") : t("list.infText");
+  if (on) $("#inf-text-b").focus();
+  state.inf.text = null;  // back from compare, the single text runs again
+  fireResults = null; $("#run-rows").innerHTML = "";
+  rerunRun();
+});
+let cmpTimer;
+$("#inf-text-b").addEventListener("input", () => { clearTimeout(cmpTimer); cmpTimer = setTimeout(rerunRun, 700); });
+document.querySelectorAll("#cmp-at button").forEach(b => b.onclick = () => {
+  state.cmp.at = b.dataset.a;
+  document.querySelectorAll("#cmp-at button").forEach(x => x.classList.toggle("on", x === b));
+  rerunRun();
+});
+$("#cmp-cons").addEventListener("change", () => contrastView());
 $("#inf-next").addEventListener("click", e => {
   const b = e.target.closest("button.nx"); if (!b || b.disabled) return;
   const ta = $("#inf-text"); ta.value += b.dataset.tok; ta.dispatchEvent(new Event("input"));
@@ -546,6 +618,7 @@ function renderList() {
 }
 // lens hits (net tab) or what fired (run tab)
 function renderResults(r, ol) {
+  if (r.cmp) return renderContrast(r, ol);
   if (!r.ready) { ol.innerHTML = `<li class="head">${esc(localizeStatus(state.statusText) || t("results.indexing"))}</li>`; return; }
   const rows = (r.results || []).map(x => `<li class="res${x.swept === false ? " unswept" : ""}" data-l="${x.layer}" data-n="${x.n}" data-kind="neuron">
     <span class="n">L${x.layer} N${x.n}</span><span class="sg ${x.sign === "+" ? "up" : "down"}">${r.fires ? `${x.sign === "+" ? "" : "−"}${x.score.toFixed(1)}×` : `${x.sign === "+" ? "+" : "−"}${x.rank + 1}`}</span>

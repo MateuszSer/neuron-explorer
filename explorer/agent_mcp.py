@@ -120,6 +120,25 @@ TOOLS = [
              "label": {"type": "string"}, "text": {"type": "string"}}, "required": ["text"]}]}},
          "chat": {"type": "boolean", "default": False}},
                      "required": ["neurons", "texts"]}},
+    {"name": "contrast", "description": "Live: search every neuron of every layer for the ones that fire more on texts "
+     "A than on texts B (or the other way). The way to find candidates for a behaviour or persona: A = texts with it "
+     "(e.g. an evil assistant), B = matched texts without it (same wording, the trait swapped or removed). Several "
+     "paraphrased texts per side average out neurons that only read one word; `consistent` marks neurons where every "
+     "text of the stronger side beats every text of the other. Per text a neuron counts its peak score over the tokens "
+     "(1 = its usual max), or with at='last' its score at the last token only: with chat=true that is where the reply "
+     "starts. Firing is not causing: test the candidates with `logprobs` / `steer`. Up to 24 texts in all.",
+     "inputSchema": {"type": "object", "properties": {
+         "a": {"type": "array", "items": {"type": "string"}, "description": "texts with the trait"},
+         "b": {"type": "array", "items": {"type": "string"}, "description": "matched texts without it"},
+         "chat": {"type": "boolean", "default": False, "description": "wrap each text as a user turn"},
+         "at": {"type": "string", "enum": ["peak", "last"], "default": "peak"},
+         "sign": {"type": "string", "enum": ["both", "+", "-"], "default": "both",
+                  "description": "'+': only neurons stronger on A; '-': only stronger on B"},
+         "min": {"type": "number", "default": 0.3, "description": "smallest |diff| to list"},
+         "consistent_only": {"type": "boolean", "default": False},
+         "layers": {"type": "array", "items": {"type": "integer"}, "description": "[lo, hi]"},
+         "limit": {"type": "integer", "default": 40}},
+                     "required": ["a", "b"]}},
     {"name": "logprobs", "description": "Live: the next token's log-probabilities after a text (chat=true by default: "
      "the text is a user turn and the next token opens the reply; `prefix` continues from the start of a reply or any "
      "text). Returns the top k tokens and the logprob of each `targets` string's first token. With `neurons` and/or "
@@ -618,6 +637,8 @@ def call(name, a):
         return post("/api/agent/logprobs", a, timeout=900)
     if name == "compare":
         return post("/api/agent/compare", a, timeout=900)
+    if name == "contrast":
+        return post("/api/agent/contrast", a, timeout=900)
     if name == "activations":
         return post("/api/agent/activations", a, timeout=900)
     ui = {"camera": "camera", "annotate_neurons": "annotate", "show_text": "text", "show_search": "search", "open_tab": "tab"}

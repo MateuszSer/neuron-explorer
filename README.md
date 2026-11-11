@@ -67,6 +67,12 @@ The R and J++ lens rows read the maps of [bubskee/qwen3.5-4b-r-jpp-lenses](https
     runs the text again, so you can generate one token at a time while watching what fires.
   - **chat** (checkbox): wraps the text as a user message in the chat template, so the last prediction is the first
     token of the assistant's reply.
+  - **compare with B** (checkbox): a second box takes texts B; the box above holds texts A (several per box, split by
+    a line of `---`). The list ranks every neuron by how much more it fires on A than on B (`+`) or on B than on A
+    (`−`), as the difference of its peak score per text averaged per side; `last` reads only the last token (with
+    chat: where the reply starts). ✓ / `consistent` marks neurons where every text of the stronger side beats every
+    text of the other. Use matched pairs (an evil and a kind assistant, same wording) to find persona candidates,
+    then test them in the chat: firing is not causing.
 - **neuron**: steered rollouts per prompt and dose, a three-column multi-turn steered chat (−, 0, +), lens and
   connections, a name, and where it fires on web text: its strongest FineFineWeb contexts per sign, each token shaded
   by the neuron's activation, and the domains it concentrates in.
@@ -146,6 +152,8 @@ ids in them name different neurons in the smaller models.
   forward pass as the activations (`/api/infer/next`). It has a raw/chat checkbox and click-to-append.
 - **Multi-neuron recipes in the chat.** The recipe and rep boxes in the chat send several pushes and a repetition
   penalty through `/api/steer` (`neurons`, `repetition_penalty`), the same way the agent's tools do.
+- **Contrast search.** "compare with B" on run (`/api/contrast`, `/api/contrast/view`) and the agent's `contrast` tool
+  (`/api/agent/contrast`) rank every neuron by its A − B firing gap over sets of texts.
 
 ## License
 
