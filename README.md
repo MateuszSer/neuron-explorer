@@ -95,6 +95,8 @@ The R and J++ lens rows read the maps of [bubskee/qwen3.5-4b-r-jpp-lenses](https
   `EXPLORER_CLAUDE_MODEL` picks the model. The server answers only pages and tools on this machine. On Windows, put
   the CLI on `PATH` (the native installer puts it in `%USERPROFILE%\.local\bin`). A running chat is stopped with
   `taskkill /T`. It uses the `claude` login and counts against that account's usage.
+  
+<img width="585" height="585" alt="image" src="https://github.com/user-attachments/assets/9f802548-0b0d-4677-85e8-359caf103ed1" />
 
 ## Sweep
 
